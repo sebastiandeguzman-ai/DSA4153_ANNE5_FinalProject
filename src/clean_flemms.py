@@ -525,3 +525,38 @@ def build_2024_clean(data_dir: Path) -> pd.DataFrame:
     logger.info("2024 clean rows: %d | NIR members: %d", len(clean), int(clean["is_nir"].sum()))
     return clean
 
+# ---------------------------------------------------------------------------
+# 4. MAIN EXECUTION & SCHEMA VERIFICATION
+# ---------------------------------------------------------------------------
+def main(raw_dir: str = ".", out_dir: str = ".") -> dict[int, pd.DataFrame]:
+    raw_path = Path(raw_dir)
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    builders = {
+        2008: build_2008_clean,
+        2013: build_2013_clean,
+        2019: build_2019_clean,
+        2024: build_2024_clean,
+    }
+
+    outputs: dict[int, pd.DataFrame] = {}
+    reference_cols: list[str] | None = None
+
+    for year, builder_fn in builders.items():
+        df_clean = builder_fn(raw_path)
+        if reference_cols is None:
+            reference_cols = list(df_clean.columns)
+        else:
+            assert list(df_clean.columns) == reference_cols, f"Schema mismatch in {year}"
+
+        dest = out_path / f"flemms_{year}_clean.csv"
+        df_clean.to_csv(dest, index=False)
+        logger.info("Saved %s (%d rows x %d cols)", dest, len(df_clean), df_clean.shape[1])
+        outputs[year] = df_clean
+
+    return outputs
+
+
+if __name__ == "__main__":
+    main()

@@ -417,3 +417,111 @@ def build_2019_clean(data_dir: Path) -> pd.DataFrame:
     logger.info("2019 clean rows: %d | NIR members: %d", len(clean), int(clean["is_nir"].sum()))
     return clean
 
+def build_2024_clean(data_dir: Path) -> pd.DataFrame:
+    """
+    Clean and integrate FLEMMS 2024 Volume 1 across all 4 tables:
+      1. HOUSEHOLD (filter INTVW == 1)
+      2. RTF1 (household housing/asset items)
+      3. MEMBER (all household members)
+      4. RTF2 (Form 2 PAPI literacy assessment, ages 5+)
+    """
+    hh = read_csv_checked(
+        data_dir / "FLEMMS PUF 2024 Volume1 - HOUSEHOLD.CSV",
+        required_cols=["REG", "REG2", "PRV", "HHID", "URBANITY", "PSU", "INTVW", "RFACT"],
+    )
+    rtf1 = read_csv_checked(
+        data_dir / "FLEMMS PUF 2024 Volume1 - RTF1.CSV",
+        required_cols=["REG", "REG2", "PRV", "HHID", "URBANITY", "ELECTRICITY"],
+    )
+    mem = read_csv_checked(
+        data_dir / "FLEMMS PUF 2024 Volume1 - MEMBER.CSV",
+        required_cols=[
+            "REG", "REG2", "PRV", "HHID", "URBANITY", "LNO",
+            "SEX", "AGE", "ATTEND_SCHOOL", "BASIC_LIT", "HGC_GRADE",
+            "WORK", "MEM_RFACT",
+        ],
+    )
+    rtf2 = read_csv_checked(
+        data_dir / "FLEMMS PUF 2024 Volume1 - RTF2.CSV",
+        required_cols=[
+            "REG", "REG2", "PRV", "HHID", "URBANITY", "LNO_F2",
+            "LLEVEL10OVER", "FLITERATE", "RESP_RFACT_F2",
+        ],
+    )
+
+    hh_keys = ["REG", "REG2", "PRV", "HHID", "URBANITY"]
+    hh_valid = hh[to_clean_numeric(hh["INTVW"]) == 1].copy()
+    assert hh_valid.duplicated(hh_keys).sum() == 0, "Duplicate HH keys in 2024 HOUSEHOLD"
+    assert rtf1.duplicated(hh_keys).sum() == 0, "Duplicate HH keys in 2024 RTF1"
+
+    hh_f1 = hh_valid[hh_keys + ["PSU"]].merge(
+        rtf1[hh_keys + ["ELECTRICITY"]],
+        on=hh_keys,
+        how="left",
+        validate="one_to_one",
+    )
+
+    mem_valid = hh_f1.merge(
+        mem,
+        on=hh_keys,
+        how="inner",
+        validate="one_to_many",
+    )
+    assert mem_valid.duplicated(hh_keys + ["LNO"]).sum() == 0, "Duplicate member keys in 2024 MEMBER"
+    assert rtf2.duplicated(hh_keys + ["LNO_F2"]).sum() == 0, "Duplicate RTF2 keys in 2024 RTF2"
+
+    merged = mem_valid.merge(
+        rtf2[hh_keys + ["LNO_F2", "LLEVEL10OVER", "FLITERATE", "RESP_RFACT_F2"]],
+        left_on=hh_keys + ["LNO"],
+        right_on=hh_keys + ["LNO_F2"],
+        how="left",
+        validate="one_to_one",
+    )
+    assert len(merged) == len(mem_valid), "Row count changed during 2024 MEMBER-RTF2 join"
+
+    geo = harmonize_region_and_nir(merged["REG"], merged["PRV"])
+    # Cross-check: reconstructed reg_harmonized must match native REG2 100%
+    native_reg2 = to_clean_numeric(merged["REG2"]).astype("Int64")
+    assert (geo["reg_harmonized"] == native_reg2).all(), "2024 NIR reconstruction mismatch vs native REG2"
+
+    basic_lit = to_clean_numeric(merged["BASIC_LIT"], na_codes={9})
+    flevel = to_clean_numeric(merged["LLEVEL10OVER"], na_codes={9})
+    fl_rate = to_clean_numeric(merged["FLITERATE"], na_codes={9})
+    cursch = to_clean_numeric(merged["ATTEND_SCHOOL"], na_codes={9})
+    job = to_clean_numeric(merged["WORK"], na_codes={9})
+    elect = to_clean_numeric(merged["ELECTRICITY"], na_codes={9})
+
+    clean = pd.concat(
+        [
+            pd.DataFrame({"survey_year": np.int16(2024)}, index=merged.index),
+            geo,
+            pd.DataFrame(
+                {
+                    "urbanity": to_clean_numeric(merged["URBANITY"], na_codes={9}).astype("Int64"),
+                    "psu": to_clean_numeric(merged["PSU"]).astype("Int64"),
+                    "hh_id": (
+                        merged["PRV"].astype(str).str.zfill(3)
+                        + "_" + merged["URBANITY"].astype(str)
+                        + "_" + merged["HHID"].astype(str).str.zfill(6)
+                    ),
+                    "line_no": to_clean_numeric(merged["LNO"]).astype("Int64"),
+                    "sex": to_clean_numeric(merged["SEX"], na_codes={9}).astype("Int64"),
+                    "age": to_clean_numeric(merged["AGE"], na_codes={999}).astype("Int64"),
+                    "highest_grade": to_clean_numeric(merged["HGC_GRADE"], na_codes={99999}).astype("Int64"),
+                    "attending_school": np.where(cursch == 1, 1, np.where(cursch == 2, 0, np.nan)),
+                    "employed": np.where(job == 1, 1, np.where(job == 2, 0, np.nan)),
+                    "basic_literate": np.where(basic_lit == 1, 1, np.where(basic_lit == 2, 0, np.nan)),
+                    "func_literacy_level": flevel.astype("Int64"),
+                    "func_literate": np.where(fl_rate == 1, 1, np.where(fl_rate == 2, 0, np.nan)),
+                    "hh_electricity": np.where(elect == 1, 1, np.where(elect == 2, 0, np.nan)),
+                    "pop_weight": to_clean_numeric(merged["MEM_RFACT"]),
+                    "literacy_weight": to_clean_numeric(merged["RESP_RFACT_F2"]),
+                },
+                index=merged.index,
+            ),
+        ],
+        axis=1,
+    )
+    logger.info("2024 clean rows: %d | NIR members: %d", len(clean), int(clean["is_nir"].sum()))
+    return clean
+

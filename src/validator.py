@@ -238,3 +238,38 @@ def validate_wave_dataset(
         "status": "PASS",
         "validated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+
+def validate_all_waves(
+    data_dir: str = ".",
+    strict: bool = False,
+    out_dir: str | None = "reports",
+) -> pd.DataFrame:
+    """Validate all 4 clean FLEMMS CSVs and export summary + granular check CSVs."""
+    base = Path(data_dir)
+    results: list[dict[str, object]] = []
+    check_records: list[dict[str, object]] = []
+
+    try:
+        for year, filename in WAVE_FILES.items():
+            summary = validate_wave_dataset(
+                base / filename, expected_year=year, strict=strict, check_records=check_records
+            )
+            results.append(summary)
+    finally:
+        # Always persist granular check logs even if an exception halts mid-run
+        if out_dir is not None and check_records:
+            out_path = Path(out_dir)
+            out_path.mkdir(parents=True, exist_ok=True)
+            checks_csv = out_path / "flemms_validation_checks.csv"
+            pd.DataFrame(check_records).to_csv(checks_csv, index=False)
+            logger.info("Saved granular validation checks CSV -> %s", checks_csv)
+
+    summary_df = pd.DataFrame(results)
+    if out_dir is not None:
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        summary_csv = out_path / "flemms_validation_summary.csv"
+        summary_df.to_csv(summary_csv, index=False)
+        logger.info("Saved wave validation summary CSV -> %s", summary_csv)
+
+    return summary_df

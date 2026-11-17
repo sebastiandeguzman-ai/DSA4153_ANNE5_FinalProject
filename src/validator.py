@@ -108,3 +108,65 @@ def validate_nir_harmonization(df: pd.DataFrame) -> dict[str, int]:
 
     prov_counts = df.loc[flag_is_nir, "nir_prov_name"].value_counts().to_dict()
     return {str(k): int(v) for k, v in prov_counts.items()}
+
+def validate_value_domains(df: pd.DataFrame) -> None:
+    """Validate allowed values for sex, age, binary indicators, and positive survey weights."""
+    # PSA coding: 1 = Male, 2 = Female
+    invalid_sex = set(df["sex"].dropna().unique()) - {1, 2}
+    if invalid_sex:
+        raise DomainValidationError(f"Invalid sex codes found: {invalid_sex}")
+
+    if df["age"].isna().any() or (df["age"] < 0).any() or (df["age"] > 120).any():
+        raise DomainValidationError(
+            f"Invalid age values (min={df['age'].min()}, max={df['age'].max()}, nulls={df['age'].isna().sum()})."
+        )
+
+    # Socioeconomic and literacy flags must strictly use 0/1 binary encoding
+    binary_cols = ["attending_school", "employed", "basic_literate", "func_literate", "hh_electricity"]
+    for col in binary_cols:
+        invalid_vals = set(df[col].dropna().unique()) - {0, 1, 0.0, 1.0}
+        if invalid_vals:
+            raise DomainValidationError(f"Column '{col}' has non-binary values: {invalid_vals}")
+
+    # Every survey record requires a strictly positive population expansion weight
+    if df["pop_weight"].isna().any() or (df["pop_weight"] <= 0).any():
+        bad_w = int((df["pop_weight"].isna() | (df["pop_weight"] <= 0)).sum())
+        raise DomainValidationError(f"Found {bad_w} rows with missing or non-positive pop_weight.")
+
+    if (df["literacy_weight"].dropna() < 0).any():
+        raise DomainValidationError("Negative literacy_weight values found.")
+
+
+def validate_literacy_consistency(df: pd.DataFrame, strict: bool = False) -> list[str]:
+    """Check age eligibility (10-64) and cross-wave literacy coding nuances."""
+    warnings_found: list[str] = []
+
+    # Functional literacy assessment applies strictly to respondents aged 10-64
+    assessed = df[df["func_literate"].notna()]
+    if not assessed.empty:
+        min_age, max_age = int(assessed["age"].min()), int(assessed["age"].max())
+        if min_age < 10 or max_age > 64:
+            raise DomainValidationError(f"Assessed func_literate outside 10-64 age scope: [{min_age}, {max_age}].")
+
+    year = int(df["survey_year"].iloc[0])
+
+    # Check 1: 2008/2013 Level 2 ("Can read, write and compute") functional literacy threshold nuance
+    if year in (2008, 2013):
+        lvl2_not_lit = int(((df["func_literacy_level"] == 2) & (df["func_literate"] == 0)).sum())
+        if lvl2_not_lit > 0:
+            warnings_found.append(
+                f"[{year}] {lvl2_not_lit:,} rows have func_literacy_level==2 coded as func_literate==0 "
+                "(PSA 2008-2019 official functional literacy includes Levels 2, 3, and 4)."
+            )
+
+    # Check 2: Undetermined literacy level (NaN) paired with non-null func_literate
+    undet_coded = int((df["func_literacy_level"].isna() & df["func_literate"].notna()).sum())
+    if undet_coded > 0:
+        warnings_found.append(
+            f"[{year}] {undet_coded:,} rows have func_literacy_level==NaN (Undetermined code 9) with non-null func_literate."
+        )
+
+    if strict and warnings_found:
+        raise DomainValidationError("Strict literacy validation failed: " + " | ".join(warnings_found))
+
+    return warnings_found

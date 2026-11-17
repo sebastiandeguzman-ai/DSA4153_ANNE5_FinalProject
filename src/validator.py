@@ -170,3 +170,71 @@ def validate_literacy_consistency(df: pd.DataFrame, strict: bool = False) -> lis
         raise DomainValidationError("Strict literacy validation failed: " + " | ".join(warnings_found))
 
     return warnings_found
+
+def validate_wave_dataset(
+    filepath: Path,
+    expected_year: int,
+    strict: bool = False,
+    check_records: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """Run all 5 validation checks on a single wave CSV and return a flat summary row."""
+    if not filepath.exists():
+        raise FileNotFoundError(f"Clean CSV not found: {filepath}")
+
+    df = pd.read_csv(filepath, low_memory=False)
+
+    def record(category: str, check_name: str, expected: object, actual: object, status: str, detail: str = "") -> None:
+        if check_records is not None:
+            check_records.append({
+                "survey_year": expected_year, "file": filepath.name, "category": category,
+                "check_name": check_name, "expected": str(expected), "actual": str(actual),
+                "status": status, "detail": detail,
+            })
+
+    # Run and log all 5 modular checks
+    for cat, chk, exp, fn in [
+        ("Schema", "exact_22_column_parity", len(EXPECTED_COLUMNS), lambda: validate_schema(df)),
+        ("Integrity", "unique_composite_key_hh_id_line_no", 0, lambda: validate_primary_keys(df, expected_year)),
+        ("Domain", "valid_domains_and_positive_weights", "valid ranges & pop_weight > 0", lambda: validate_value_domains(df)),
+    ]:
+        try:
+            fn()
+            record(cat, chk, exp, "OK", "PASS", f"rows={len(df):,}")
+        except FLEMMSValidationError as exc:
+            record(cat, chk, exp, "violation", "FAIL", str(exc))
+            raise
+
+    try:
+        nir_breakdown = validate_nir_harmonization(df)
+        nir_detail = "; ".join(f"{k}: {v:,}" for k, v in sorted(nir_breakdown.items()))
+        record("Geography", "nir_region_18_reconstruction", "18 regions + NIR", f"{df['reg_harmonized'].nunique()} regions", "PASS", nir_detail)
+    except FLEMMSValidationError as exc:
+        record("Geography", "nir_region_18_reconstruction", "18 regions + NIR", "mismatch", "FAIL", str(exc))
+        raise
+
+    try:
+        warnings_found = validate_literacy_consistency(df, strict=strict)
+        for w in warnings_found:
+            logger.warning(w)
+            record("Literacy", "func_literacy_coding_consistency", "0 nuances", "nuance flagged", "WARN", w)
+        if not warnings_found:
+            record("Literacy", "func_literacy_coding_consistency", "consistent 10-64 coding", "consistent", "PASS", "No discrepancies")
+    except FLEMMSValidationError as exc:
+        record("Literacy", "func_literacy_coding_consistency", "consistent 10-64 coding", "failed", "FAIL", str(exc))
+        raise
+
+    logger.info("PASS | %s | rows=%s | regions=%d", filepath.name, f"{len(df):,}", df["reg_harmonized"].nunique())
+    return {
+        "survey_year": expected_year, "file": filepath.name, "rows": int(len(df)), "cols": int(df.shape[1]),
+        "unique_regions": int(df["reg_harmonized"].nunique()), "nir_rows": int(df["is_nir"].sum()),
+        "nir_negros_occidental": int(nir_breakdown.get("Negros Occidental", 0)),
+        "nir_negros_oriental": int(nir_breakdown.get("Negros Oriental", 0)),
+        "nir_siquijor": int(nir_breakdown.get("Siquijor", 0)),
+        "assessed_10_64": int(df["func_literate"].notna().sum()),
+        "total_pop_weight": round(float(df["pop_weight"].sum()), 2),
+        "total_literacy_weight": round(float(df["literacy_weight"].dropna().sum()), 2),
+        "warnings_count": len(warnings_found),
+        "warnings_detail": " | ".join(warnings_found) if warnings_found else "None",
+        "status": "PASS",
+        "validated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }

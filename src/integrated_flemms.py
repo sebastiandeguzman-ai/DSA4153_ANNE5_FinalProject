@@ -317,3 +317,16 @@ def reason(r: pd.Series) -> str:
         print("FAILED:", f)
     return w, np.long, checks_df
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Consolidate 2008-2024 FLEMMS integrated workbooks.")
+    parser.add_argument("--data-dir", default=".", help="Directory containing FLEMMS_2008_2013_integrated.xlsx and FLEMMS_2019_2024_Integrated.xlsx")
+    parser.add_argument("--out", default=None, help="Output .xlsx path (default: <data-dir>/FLEMMS_2008-2024_integrated.xlsx)")
+    args = parser.parse_args()
+
+    in_dir = Path(args.data_dir)
+    out_path = Path(args.out) if args.out else in_dir / OUT_NAME
+    consolidate_flemms(in_dir=in_dir, out_path=out_path)
+
+
+if __name__ == "__main__":
+    main()

@@ -140,28 +140,28 @@ def consolidate_flemms(in_dir: Path, out_path: Path) -> tuple[pd.DataFrame, pd.D
 
     vals = long.pivot(index=KEY, columns="year", values=["population", "count", "rate", "age_base", "source_table"])
     vals.columns = [f"{v}_{y}" for v, y in vals.columns]
- info = long.groupby(KEY, observed=False).agg(
+info = long.groupby(KEY, observed=False).agg(
         years_present=("year", lambda s: ",".join(map(str, sorted(s)))),
         n_years=("year", "size"),
         source_files=("source_file", lambda s: "; ".join(sorted(set(s)))),
     )
-    w = vals.join(info).reset_index()
-    w = w.merge(
+w = vals.join(info).reset_index()
+w = w.merge(
         a[KEY + ["unmatched_reason"]].rename(columns={"unmatched_reason": "reason_in_2008_2013_file"}),
         on=KEY,
         how="left",
     )
-    w["geography_name"] = w.geography_code.map(names)
-    w["indicator_label"] = w.indicator.map(labels)
+w["geography_name"] = w.geography_code.map(names)
+w["indicator_label"] = w.indicator.map(labels)
 
-    early = w.years_present.str.contains("2008|2013")
-    late = w.years_present.str.contains("2019|2024")
-    w["match_status"] = np.select(
+early = w.years_present.str.contains("2008|2013")
+late = w.years_present.str.contains("2019|2024")
+w["match_status"] = np.select(
         [w.n_years == 4, early & late, early],
         ["all_4_years", "cross_period_partial", "2008_2013_only"],
         "2019_2024_only",
     )
-    w["comparability"] = np.select(
+w["comparability"] = np.select(
         [(w.indicator == "BASIC_RW") & (w.age_group == "All"), w.indicator == "FUNC_RWCC"],
         [
             "CAUTION: age base differs by year (see age_base_*)",
@@ -170,19 +170,19 @@ def consolidate_flemms(in_dir: Path, out_path: Path) -> tuple[pd.DataFrame, pd.D
         "COMPARABLE",
     )
 
-    def reason(r: pd.Series) -> str:
-        if r.n_years == 4:
+def reason(r: pd.Series) -> str:
+    if r.n_years == 4:
             return ""
-        if r.area != "All":
+    if r.area != "All":
             return "Urban/rural breakdown published in 2013 summary slice only"
-        if r.indicator == "BASIC_RW_10_64":
+    if r.indicator == "BASIC_RW_10_64":
             return "Basic literacy 10-64 slice generated in 2019/2024 table only"
-        if r.age_group in ("6-9", "5-9"):
+    if r.age_group in ("6-9", "5-9"):
             return "Age band differs: 6-9 in 2008 vs 5-9 in 2019/2024"
-        src = r.reason_in_2008_2013_file if isinstance(r.reason_in_2008_2013_file, str) else ""
-        if r.indicator == "FUNC_RWC" or r.indicator.startswith("LEVEL_"):
-            return "Indicator is in 2008/2013 file only" + (f"; {src}" if src else "")
-        return src or f"Missing in year(s): {', '.join(str(y) for y in YEARS if str(y) not in r.years_present)}"
+    src = r.reason_in_2008_2013_file if isinstance(r.reason_in_2008_2013_file, str) else ""
+    if r.indicator == "FUNC_RWC" or r.indicator.startswith("LEVEL_"):
+        return "Indicator is in 2008/2013 file only" + (f"; {src}" if src else "")
+    return src or f"Missing in year(s): {', '.join(str(y) for y in YEARS if str(y) not in r.years_present)}"
 
     w["unmatched_reason"] = w.apply(reason, axis=1)
 
@@ -216,6 +216,7 @@ def consolidate_flemms(in_dir: Path, out_path: Path) -> tuple[pd.DataFrame, pd.D
     summary = unm.groupby(["match_status", "indicator", "unmatched_reason"], observed=False).size().reset_index(name="rows")
 
     exp_0813 = rc["merged total rows"]
+
     exp_1924 = ck["Merged rows = |2019 keys ∪ 2024 keys|"]
     check("Rows read: 2008/2013 'merged' vs its own row_counts sheet", exp_0813, len(a), f_0813.name)
     check("Rows read: 2019/2024 'Merged_2019_2024' vs its own Checks sheet", exp_1924, len(b), f_1924.name)
@@ -314,5 +315,5 @@ def consolidate_flemms(in_dir: Path, out_path: Path) -> tuple[pd.DataFrame, pd.D
     print(f"Saved {out_path.name}: {len(w)} consolidated rows, {len(long)} long rows, {len(unm)} unmatched, {len(failed)} failed checks")
     for f in failed:
         print("FAILED:", f)
-    return w, long, checks_df
+    return w, np.long, checks_df
 

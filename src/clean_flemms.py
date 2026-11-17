@@ -109,3 +109,51 @@ def read_cspro_fixed_comma_csv(filepath: Path, required_cols: list[str]) -> pd.D
     )
     return df
 
+# ---------------------------------------------------------------------------
+# 2. VECTORIZED NIR & REGION HARMONIZATION (NUMPY)
+# ---------------------------------------------------------------------------
+def harmonize_region_and_nir(reg_orig: pd.Series, prov_code: pd.Series) -> pd.DataFrame:
+    """
+    Reconstruct Negros Island Region (REG_HARMONIZED = 18) and standardize
+    legacy region codes (41->4, 42->17, 15->19) using vectorized NumPy masks.
+    """
+    reg_arr = pd.to_numeric(reg_orig, errors="coerce").to_numpy(dtype=np.float64)
+    prov_arr = pd.to_numeric(prov_code, errors="coerce").fillna(-1).to_numpy(dtype=np.int64)
+
+    is_nir = np.isin(prov_arr, NIR_PROVINCE_CODES)
+
+    reg_harmonized = np.select(
+        condlist=[
+            is_nir,
+            reg_arr == 41,  # Legacy CALABARZON -> 4
+            reg_arr == 42,  # Legacy MIMAROPA -> 17
+            reg_arr == 15,  # Legacy ARMM -> 19 (BARMM)
+        ],
+        choicelist=[18, 4, 17, 19],
+        default=reg_arr,
+    ).astype(np.int64)
+
+    reg_series = pd.Series(reg_harmonized, index=reg_orig.index)
+    prov_series = pd.Series(prov_arr, index=reg_orig.index).replace(-1, np.nan)
+
+    return pd.DataFrame(
+        {
+            "reg_orig": pd.to_numeric(reg_orig, errors="coerce").astype("Int64"),
+            "reg_harmonized": reg_series.astype("Int64"),
+            "reg_name": reg_series.map(REGION_NAMES),
+            "is_nir": is_nir.astype(np.int8),
+            "prov_code": prov_series.astype("Int64"),
+            "nir_prov_name": prov_series.map(NIR_PROVINCE_NAMES),
+        },
+        index=reg_orig.index,
+    )
+
+
+def to_clean_numeric(series: pd.Series, na_codes: set | None = None) -> pd.Series:
+    """Strip whitespace strings and convert specified special/refusal codes to NaN."""
+    cleaned = series.astype(str).str.strip().replace({"": np.nan, "nan": np.nan, "None": np.nan})
+    num = pd.to_numeric(cleaned, errors="coerce")
+    if na_codes:
+        num = num.where(~num.isin(na_codes), np.nan)
+    return num
+

@@ -49,3 +49,63 @@ NIR_PROVINCE_NAMES = {
     46: "Negros Oriental",
     61: "Siquijor",
 }
+
+# ---------------------------------------------------------------------------
+# 1. ACQUISITION HELPERS
+# ---------------------------------------------------------------------------
+def read_csv_checked(filepath: Path, required_cols: list[str], **kwargs) -> pd.DataFrame:
+    """Load a CSV file and verify non-empty row count and required columns."""
+    if not filepath.exists():
+        raise FileNotFoundError(f"Missing required raw dataset: {filepath}")
+    df = pd.read_csv(filepath, low_memory=False, **kwargs)
+    if df.empty:
+        raise ValueError(f"Loaded dataset is empty: {filepath}")
+    missing = set(required_cols) - set(df.columns)
+    if missing:
+        raise KeyError(f"{filepath.name} missing required columns: {sorted(missing)}")
+    return df
+
+
+def read_cspro_fixed_comma_csv(filepath: Path, required_cols: list[str]) -> pd.DataFrame:
+    """
+    Safely read PSA CSPro comma-delimited exports where unquoted commas appear
+    inside fixed-width *_SPECIFY text fields (documented 2019 PUF defect).
+    """
+    if not filepath.exists():
+        raise FileNotFoundError(f"Missing required raw dataset: {filepath}")
+
+    with filepath.open("r", encoding="utf-8", errors="replace") as fh:
+        header_line = fh.readline().rstrip("\r\n")
+        cols = header_line.split(",")
+        n_cols = len(cols)
+        lines = [ln.rstrip("\r\n") for ln in fh]
+
+    sample_line = next(ln for ln in lines if ln.count(",") == n_cols - 1)
+    spans = []
+    pos = 0
+    for token in sample_line.split(","):
+        width = len(token)
+        spans.append((pos, pos + width))
+        pos += width + 1
+
+    records = []
+    repaired_count = 0
+    for ln in lines:
+        if ln.count(",") == n_cols - 1:
+            records.append(ln.split(","))
+        else:
+            records.append([ln[s:e] for s, e in spans])
+            repaired_count += 1
+
+    df = pd.DataFrame(records, columns=cols)
+    missing = set(required_cols) - set(df.columns)
+    if missing:
+        raise KeyError(f"{filepath.name} missing required columns: {sorted(missing)}")
+    logger.info(
+        "Loaded %s (%d rows; repaired %d unquoted-comma records)",
+        filepath.name,
+        len(df),
+        repaired_count,
+    )
+    return df
+

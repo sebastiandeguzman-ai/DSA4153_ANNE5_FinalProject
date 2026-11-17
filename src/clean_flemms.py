@@ -233,3 +233,75 @@ def build_2008_clean(data_dir: Path) -> pd.DataFrame:
     logger.info("2008 clean rows: %d | NIR members: %d", len(clean), int(clean["is_nir"].sum()))
     return clean
 
+def build_2013_clean(data_dir: Path) -> pd.DataFrame:
+    """
+    Clean and integrate FLEMMS 2013 UrbanRural RT01 & RT02.
+    Uses UrbanRural PUF because PRV (province) and URB are preserved there.
+    Note: Region VIII (Eastern Visayas) was excluded in 2013 due to Typhoon Yolanda.
+    """
+    rt01 = read_csv_checked(
+        data_dir / "FLEMMS PUF 2013 UrbanRural RT01 - Household Members.CSV",
+        required_cols=[
+            "REG", "PRV", "STRATUM", "PSU", "HHSEQNO", "QID", "URB",
+            "C01_LNO", "C04_SEX", "C05_AGE", "C11_ABLERW", "C12_HGRADE",
+            "C14_CURSCH", "C21_JOB", "E1_ELECT", "PWGT",
+        ],
+    )
+    rt02 = read_csv_checked(
+        data_dir / "FLEMMS PUF 2013 UrbanRural RT02 - Individual.CSV",
+        required_cols=["REG", "PRV", "STRATUM", "PSU", "HHSEQNO", "QID", "IRESP", "LLEVEL", "PWGT2"],
+    )
+
+    keys_01 = ["REG", "PRV", "STRATUM", "PSU", "HHSEQNO", "QID", "C01_LNO"]
+    keys_02 = ["REG", "PRV", "STRATUM", "PSU", "HHSEQNO", "QID", "IRESP"]
+    assert rt01.duplicated(keys_01).sum() == 0, "Duplicate member keys in 2013 RT01"
+    assert rt02.duplicated(keys_02).sum() == 0, "Duplicate respondent keys in 2013 RT02"
+
+    merged = rt01.merge(
+        rt02[keys_02 + ["LLEVEL", "PWGT2"]],
+        left_on=keys_01,
+        right_on=keys_02,
+        how="left",
+        validate="one_to_one",
+    )
+    assert len(merged) == len(rt01), "Row count changed during 2013 left join"
+
+    geo = harmonize_region_and_nir(merged["REG"], merged["PRV"])
+
+    basic_lit = to_clean_numeric(merged["C11_ABLERW"], na_codes={9})
+    flevel = to_clean_numeric(merged["LLEVEL"], na_codes={9})
+    cursch = to_clean_numeric(merged["C14_CURSCH"], na_codes={9})
+    job = to_clean_numeric(merged["C21_JOB"], na_codes={9})
+    elect = to_clean_numeric(merged["E1_ELECT"], na_codes={9})
+
+    clean = pd.concat(
+        [
+            pd.DataFrame({"survey_year": np.int16(2013)}, index=merged.index),
+            geo,
+            pd.DataFrame(
+                {
+                    "urbanity": to_clean_numeric(merged["URB"], na_codes={9}).astype("Int64"),
+                    "psu": to_clean_numeric(merged["PSU"]).astype("Int64"),
+                    "hh_id": merged["QID"].astype(str).str.strip(),
+                    "line_no": to_clean_numeric(merged["C01_LNO"]).astype("Int64"),
+                    "sex": to_clean_numeric(merged["C04_SEX"], na_codes={9}).astype("Int64"),
+                    "age": to_clean_numeric(merged["C05_AGE"], na_codes={999}).astype("Int64"),
+                    "highest_grade": to_clean_numeric(merged["C12_HGRADE"], na_codes={999}).astype("Int64"),
+                    # In 2013 C14_CURSCH: 1 = Yes (Public), 2 = Yes (Private), 3 = No
+                    "attending_school": np.where(cursch.isin([1, 2]), 1, np.where(cursch == 3, 0, np.nan)),
+                    "employed": np.where(job == 1, 1, np.where(job == 2, 0, np.nan)),
+                    "basic_literate": np.where(basic_lit == 1, 1, np.where(basic_lit == 2, 0, np.nan)),
+                    "func_literacy_level": flevel.astype("Int64"),
+                    "func_literate": np.where(flevel.isin([3, 4]), 1, np.where(flevel.isin([0, 1, 2]), 0, np.nan)),
+                    "hh_electricity": np.where(elect == 1, 1, np.where(elect == 2, 0, np.nan)),
+                    "pop_weight": to_clean_numeric(merged["PWGT"]),
+                    "literacy_weight": to_clean_numeric(merged["PWGT2"]),
+                },
+                index=merged.index,
+            ),
+        ],
+        axis=1,
+    )
+    logger.info("2013 clean rows: %d | NIR members: %d", len(clean), int(clean["is_nir"].sum()))
+    return clean
+

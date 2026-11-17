@@ -14,6 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from matplotlib.pyplot import rc
 import numpy as np
 import pandas as pd
 from openpyxl import load_workbook
@@ -215,4 +216,103 @@ def consolidate_flemms(in_dir: Path, out_path: Path) -> tuple[pd.DataFrame, pd.D
     summary = unm.groupby(["match_status", "indicator", "unmatched_reason"], observed=False).size().reset_index(name="rows")
 
     exp_0813 = rc["merged total rows"]
-    
+    exp_1924 = ck["Merged rows = |2019 keys ∪ 2024 keys|"]
+    check("Rows read: 2008/2013 'merged' vs its own row_counts sheet", exp_0813, len(a), f_0813.name)
+    check("Rows read: 2019/2024 'Merged_2019_2024' vs its own Checks sheet", exp_1924, len(b), f_1924.name)
+    check("Long rows 2008", rc["2008 rows after cleaning (duplicates removed)"], int((long.year == 2008).sum()))
+    check("Long rows 2013", rc["2013 rows after age harmonisation"], int((long.year == 2013).sum()))
+    check("Long rows 2019", int(b["pop_2019"].notna().sum()), int((long.year == 2019).sum()))
+    check("Long rows 2024", int(b["pop_2024"].notna().sum()), int((long.year == 2024).sum()))
+    check("Duplicate keys within a year", 0, int(long.duplicated(KEY + ["year"]).sum()))
+
+    keys_a = set(a[KEY].itertuples(index=False, name=None))
+    keys_b2 = set(keys_b[KEY].itertuples(index=False, name=None))
+    check(
+        "Consolidated rows = |2008/13 keys| + |2019/24 keys| - |overlap|",
+        len(keys_a) + len(keys_b2) - len(keys_a & keys_b2),
+        len(w),
+        f"{len(keys_a)} + {len(keys_b2)} - {len(keys_a & keys_b2)} overlapping keys",
+    )
+    check("Sum of n_years = long rows", len(long), int(w.n_years.sum()))
+    check("Rows with a reason = rows not matched in all 4 years", len(unm), int((w.unmatched_reason != "").sum()))
+    check("Max |rate - count/population*100| (pp)", 0, float((long["rate"] - long["count"] / long.population * 100).abs().max()), tol=0.01)
+    for y in YEARS:
+        check(f"Non-blank rate_{y} in consolidated = long rows {y}", int((long.year == y).sum()), int(w[f"rate_{y}"].notna().sum()))
+
+    counts += [
+        dict(stage="stacked long", source_file=out_path.name, sheet="stacked_long", rows=len(long)),
+        dict(stage="consolidated merged", source_file=out_path.name, sheet="consolidated_merged", rows=len(w)),
+        dict(stage="unmatched records", source_file=out_path.name, sheet="unmatched_records", rows=len(unm)),
+    ]
+
+    readme = [
+        "FLEMMS 2008 / 2013 / 2019 / 2024 - Consolidated Microdata Dataset (built by 2008_2024_integrated_flemms.py)",
+        f"Sources: {f_0813.name} (years 2008 + 2013) and {f_1924.name} (years 2019 + 2024), derived from the 4 clean FLEMMS PUFs.",
+        "Harmonised: indicator codes (basic_5plus -> BASIC_RW, functional_10_64 -> FUNC_RWCC, basic_10_64 -> BASIC_RW_10_64), "
+        "all 18 regions including reconstructed Negros Island Region (NIR) across all 4 waves, 'Both Sexes' -> 'Both', '60 and over' -> '60+', persons units.",
+        "consolidated_merged: one row per indicator x geography x area x age_group x sex across all 4 years, with live Excel change_pp_* formulas.",
+        "stacked_long: tidy panel with one row per record per year.",
+        "unmatched_records / unmatched_summary: rows not present in all 4 years with explicit classification reasons.",
+        "Caveats: ARMM (2008/2013) and BARMM (2019/2024) share one code but boundaries differ; Region VIII was excluded by PSA in 2013; "
+        "PSA revised functional literacy in 2024 (Board Resolution No. 13, s. 2024).",
+    ]
+    sheets = {
+        "README": pd.DataFrame({"FLEMMS consolidation": readme}),
+        "consolidated_merged": w,
+        "stacked_long": long[
+            ["year", "source_file", "source_sheet", "source_table"]
+            + KEY
+            + ["geography_name", "indicator_label", "population", "count", "rate", "age_base"]
+        ],
+        "unmatched_records": unm.drop(columns=[c for c in unm if c.startswith("change_pp")]),
+        "unmatched_summary": summary,
+        "row_counts": pd.DataFrame(counts),
+        "checks": pd.DataFrame(checks),
+        "region_crosswalk": cw[["code", "name", "label_2008", "label_2013", "label_2019_2024", "note"]],
+    }
+    with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+        for name, df in sheets.items():
+            df.to_excel(xw, sheet_name=name, index=False)
+
+    wb = load_workbook(out_path)
+    for ws in wb:
+        head = {c.value: c.column_letter for c in ws[1]}
+        for row in ws.iter_rows():
+            for c in row:
+                c.font = Font(name="Arial", size=10, bold=c.row == 1, color="FFFFFF" if c.row == 1 else "000000")
+                if c.row == 1:
+                    c.fill = PatternFill("solid", fgColor="1F3864")
+        for col in ws.columns:
+            width = max(len(str(c.value)) if c.value is not None else 0 for c in col[:200])
+            ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 10), 45)
+        ws.freeze_panes = "A2"
+        for name, letter in head.items():
+            fmt = "#,##0" if name.startswith(("population", "count")) else "0.00" if name.startswith(("rate", "change_pp")) else None
+            if fmt:
+                for c in ws[letter][1:]:
+                    c.number_format = fmt
+
+    ws = wb["README"]
+    ws.column_dimensions["A"].width = 140
+    for c in ws["A"]:
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+
+    ws = wb["consolidated_merged"]
+    col = {c.value: c.column_letter for c in ws[1]}
+    for name, (old, new) in {
+        "change_pp_2008_2013": (2008, 2013),
+        "change_pp_2013_2019": (2013, 2019),
+        "change_pp_2019_2024": (2019, 2024),
+    }.items():
+        o, n = col[f"rate_{old}"], col[f"rate_{new}"]
+        for r in range(2, ws.max_row + 1):
+            ws[f"{col[name]}{r}"] = f'=IF(AND(ISNUMBER({o}{r}),ISNUMBER({n}{r})),{n}{r}-{o}{r},"")'
+    wb.save(out_path)
+
+    checks_df = pd.DataFrame(checks)
+    failed = checks_df[checks_df["result"] == "FAIL"]["check"].tolist()
+    print(f"Saved {out_path.name}: {len(w)} consolidated rows, {len(long)} long rows, {len(unm)} unmatched, {len(failed)} failed checks")
+    for f in failed:
+        print("FAILED:", f)
+    return w, long, checks_df
+

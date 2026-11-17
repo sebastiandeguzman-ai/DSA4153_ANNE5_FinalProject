@@ -273,3 +273,79 @@ def validate_all_waves(
         logger.info("Saved wave validation summary CSV -> %s", summary_csv)
 
     return summary_df
+def _make_valid_sample_df(year: int = 2024) -> pd.DataFrame:
+    """Create a minimal valid 3-row DataFrame matching the 22-column schema."""
+    return pd.DataFrame({
+        "survey_year": [year, year, year], "reg_orig": [6, 7, 13], "reg_harmonized": [18, 18, 13],
+        "reg_name": ["Negros Island Region (NIR)", "Negros Island Region (NIR)", "National Capital Region (NCR)"],
+        "is_nir": [1, 1, 0], "prov_code": [45, 46, 39],
+        "nir_prov_name": ["Negros Occidental", "Negros Oriental", np.nan],
+        "urbanity": [1, 2, 1], "psu": [101, 202, 303],
+        "hh_id": ["045_1_000001", "046_2_000002", "039_1_000003"], "line_no": [1, 1, 1],
+        "sex": [1, 2, 1], "age": [25, 34, 41], "highest_grade": [60413, 34011, 24013],
+        "attending_school": [0.0, 0.0, 0.0], "employed": [1.0, 1.0, 1.0],
+        "basic_literate": [1.0, 1.0, 1.0], "func_literacy_level": [3.0, 3.0, 2.0],
+        "func_literate": [1.0, 1.0, 0.0], "hh_electricity": [1.0, 1.0, 1.0],
+        "pop_weight": [112.5, 98.4, 210.1], "literacy_weight": [115.0, 101.2, 215.0],
+    })
+
+
+def run_self_tests(out_dir: str | None = "reports") -> pd.DataFrame:
+    """Run 6 automated normal, edge, and invalid input tests and export results CSV."""
+    logger.info("Running automated validation self-tests...")
+    test_rows: list[dict[str, object]] = []
+
+    def expect_error(tid: str, name: str, cat: str, exc_cls: type[Exception], fn) -> None:
+        try:
+            fn()
+            raise AssertionError(f"Expected {exc_cls.__name__} for {name}")
+        except exc_cls:
+            test_rows.append({"test_id": tid, "test_name": name, "input_category": cat,
+                              "expected_outcome": exc_cls.__name__, "actual_outcome": exc_cls.__name__, "status": "PASS"})
+
+    # T1: Normal valid 22-column NIR sample passes cleanly
+    valid_df = _make_valid_sample_df(2024)
+    validate_schema(valid_df)
+    validate_primary_keys(valid_df, 2024)
+    assert validate_nir_harmonization(valid_df) == {"Negros Occidental": 1, "Negros Oriental": 1}
+    validate_value_domains(valid_df)
+    assert validate_literacy_consistency(valid_df, strict=True) == []
+    test_rows.append({"test_id": "T1", "test_name": "valid_22_col_nir_sample", "input_category": "Normal",
+                      "expected_outcome": "PASS", "actual_outcome": "PASS", "status": "PASS"})
+
+    # T2-T6: Invalid, edge, and defect cases
+    expect_error("T2", "missing_required_column", "Invalid", SchemaValidationError,
+                 lambda: validate_schema(valid_df.drop(columns=["is_nir"])))
+    expect_error("T3", "duplicate_member_primary_key", "Invalid", IntegrityValidationError,
+                 lambda: validate_primary_keys(pd.concat([valid_df, valid_df.iloc[[0]]], ignore_index=True), 2024))
+    bad_nir = valid_df.copy(); bad_nir.loc[0, ["reg_harmonized", "is_nir"]] = [6, 0]
+    expect_error("T4", "unreconstructed_nir_province_leak", "Edge/Invalid", NIRHarmonizationError,
+                 lambda: validate_nir_harmonization(bad_nir))
+    bad_w = valid_df.copy(); bad_w.loc[1, "pop_weight"] = 0.0
+    expect_error("T5", "zero_population_weight", "Invalid", DomainValidationError,
+                 lambda: validate_value_domains(bad_w))
+    def_13 = _make_valid_sample_df(2013); def_13.loc[2, ["func_literacy_level", "func_literate"]] = [2.0, 0.0]
+    expect_error("T6", "documented_2013_level2_defect", "Edge/Defect", DomainValidationError,
+                 lambda: validate_literacy_consistency(def_13, strict=True))
+
+    tests_df = pd.DataFrame(test_rows)
+    if out_dir is not None:
+        out_path = Path(out_dir); out_path.mkdir(parents=True, exist_ok=True)
+        tests_df.to_csv(out_path / "flemms_self_test_results.csv", index=False)
+    logger.info("ALL 6 AUTOMATED VALIDATION TESTS PASSED.")
+    return tests_df
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Validate cleaned FLEMMS datasets and export CSV reports.")
+    parser.add_argument("--data-dir", default=".", help="Directory containing clean CSVs")
+    parser.add_argument("--out-dir", default="reports", help="Directory where validation CSVs will be written")
+    parser.add_argument("--strict", action="store_true", help="Fail on literacy coding warnings")
+    parser.add_argument("--test", action="store_true", help="Run automated edge/invalid input tests")
+    args = parser.parse_args()
+
+    if args.test:
+        print(run_self_tests(out_dir=args.out_dir).to_string(index=False))
+    else:
+        summary_df = validate_all_waves(data_dir=args.data_dir, strict=args.strict, out_dir=args.out_dir)
+        print(summary_df.drop(columns=["warnings_detail"]).to_string(index=False))

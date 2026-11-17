@@ -1,0 +1,10 @@
+item,rows
+2008 rows after microdata aggregation,489
+2008 rows after cleaning (duplicates removed),489
+2013 rows after microdata aggregation,480
+2013 rows after age harmonisation,480
+merged: matched in both years,468
+merged: 2008 only,21
+merged: 2013 only,12
+merged total rows,501
+expected total = 2008 + 2013(harmonised) - matched,501

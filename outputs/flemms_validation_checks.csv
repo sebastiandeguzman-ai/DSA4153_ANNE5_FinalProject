@@ -1,0 +1,21 @@
+survey_year,file,category,check_name,expected,actual,status,detail
+2008,flemms_2008_clean.csv,Schema,exact_22_column_parity,22,22,PASS,All 22 columns match order and names
+2008,flemms_2008_clean.csv,Integrity,unique_composite_key_hh_id_line_no,0,0,PASS,"rows=95,126, survey_year=2008"
+2008,flemms_2008_clean.csv,Geography,nir_region_18_reconstruction,18 regions + NIR consistency,18 regions,PASS,"Negros Occidental: 2,459; Negros Oriental: 1,130; Siquijor: 135"
+2008,flemms_2008_clean.csv,Domain,valid_domains_and_positive_weights,valid ranges & pop_weight > 0,all valid,PASS,"total_pop_weight=91,053,463"
+2008,flemms_2008_clean.csv,Literacy,func_literacy_coding_consistency,0 coding nuances,nuance flagged,WARN,"[2008] 10,401 rows have func_literacy_level==2 coded as func_literate==0 (PSA 2008-2019 official functional literacy includes Levels 2, 3, and 4)."
+2013,flemms_2013_clean.csv,Schema,exact_22_column_parity,22,22,PASS,All 22 columns match order and names
+2013,flemms_2013_clean.csv,Integrity,unique_composite_key_hh_id_line_no,0,0,PASS,"rows=94,450, survey_year=2013"
+2013,flemms_2013_clean.csv,Geography,nir_region_18_reconstruction,18 regions + NIR consistency,17 regions,PASS,"Negros Occidental: 2,560; Negros Oriental: 1,155; Siquijor: 93"
+2013,flemms_2013_clean.csv,Domain,valid_domains_and_positive_weights,valid ranges & pop_weight > 0,all valid,PASS,"total_pop_weight=94,513,593"
+2013,flemms_2013_clean.csv,Literacy,func_literacy_coding_consistency,0 coding nuances,nuance flagged,WARN,"[2013] 10,523 rows have func_literacy_level==2 coded as func_literate==0 (PSA 2008-2019 official functional literacy includes Levels 2, 3, and 4)."
+2019,flemms_2019_clean.csv,Schema,exact_22_column_parity,22,22,PASS,All 22 columns match order and names
+2019,flemms_2019_clean.csv,Integrity,unique_composite_key_hh_id_line_no,0,0,PASS,"rows=169,923, survey_year=2019"
+2019,flemms_2019_clean.csv,Geography,nir_region_18_reconstruction,18 regions + NIR consistency,18 regions,PASS,"Negros Occidental: 2,914; Negros Oriental: 1,433; Siquijor: 586"
+2019,flemms_2019_clean.csv,Domain,valid_domains_and_positive_weights,valid ranges & pop_weight > 0,all valid,PASS,"total_pop_weight=107,792,439"
+2019,flemms_2019_clean.csv,Literacy,func_literacy_coding_consistency,0 coding nuances,nuance flagged,WARN,"[2019] 2,879 rows have func_literacy_level==NaN (Undetermined code 9) with non-null func_literate."
+2024,flemms_2024_clean.csv,Schema,exact_22_column_parity,22,22,PASS,All 22 columns match order and names
+2024,flemms_2024_clean.csv,Integrity,unique_composite_key_hh_id_line_no,0,0,PASS,"rows=650,424, survey_year=2024"
+2024,flemms_2024_clean.csv,Geography,nir_region_18_reconstruction,18 regions + NIR consistency,18 regions,PASS,"City of Bacolod (HUC): 5,891; Negros Occidental: 5,679; Negros Oriental: 5,558; Siquijor: 2,921"
+2024,flemms_2024_clean.csv,Domain,valid_domains_and_positive_weights,valid ranges & pop_weight > 0,all valid,PASS,"total_pop_weight=114,578,815"
+2024,flemms_2024_clean.csv,Literacy,func_literacy_coding_consistency,consistent 10-64 coding,consistent,PASS,No coding discrepancies

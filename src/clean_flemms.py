@@ -157,3 +157,79 @@ def to_clean_numeric(series: pd.Series, na_codes: set | None = None) -> pd.Serie
         num = num.where(~num.isin(na_codes), np.nan)
     return num
 
+# ---------------------------------------------------------------------------
+# 3. WAVE-SPECIFIC CLEANING & INTEGRATION FUNCTIONS
+# ---------------------------------------------------------------------------
+def build_2008_clean(data_dir: Path) -> pd.DataFrame:
+    """Clean and integrate FLEMMS 2008 RT01 (All Members) and RT02 (10-64 Assessment)."""
+    rt01 = read_csv_checked(
+        data_dir / "FLEMMS PUF 2008 RT01 - All Members.CSV",
+        required_cols=[
+            "PREG", "PSTRATUM", "PPSU", "PHHSEQNO", "PC01_LNO",
+            "PC04_SEX", "PC05_AGE", "PC11_ABLERW", "PC12_HGRADE",
+            "PC15_CURSCH", "PXC22_JOB", "PD1_ELECT", "PFPOPWGT",
+        ],
+    )
+    rt02 = read_csv_checked(
+        data_dir / "FLEMMS PUF 2008 RT02 - 10-64 Years Old.CSV",
+        required_cols=["PREG", "PSTRATUM", "PPSU", "PHHSEQNO", "LNO_10_64", "PLITERACY", "PF2FWGT"],
+    )
+
+    keys_01 = ["PREG", "PSTRATUM", "PPSU", "PHHSEQNO", "PC01_LNO"]
+    keys_02 = ["PREG", "PSTRATUM", "PPSU", "PHHSEQNO", "LNO_10_64"]
+    assert rt01.duplicated(keys_01).sum() == 0, "Duplicate member keys in 2008 RT01"
+    assert rt02.duplicated(keys_02).sum() == 0, "Duplicate respondent keys in 2008 RT02"
+
+    merged = rt01.merge(
+        rt02[keys_02 + ["PLITERACY", "PF2FWGT"]],
+        left_on=keys_01,
+        right_on=keys_02,
+        how="left",
+        validate="one_to_one",
+    )
+    assert len(merged) == len(rt01), "Row count changed during 2008 left join"
+
+    # Extract 2-digit province code from PPSU (e.g., 45001 -> 45, 46001 -> 46, 61001 -> 61)
+    prov_code = pd.to_numeric(merged["PPSU"], errors="coerce") // 1000
+    geo = harmonize_region_and_nir(merged["PREG"], prov_code)
+
+    basic_lit = to_clean_numeric(merged["PC11_ABLERW"], na_codes={9})
+    flevel = to_clean_numeric(merged["PLITERACY"], na_codes={9})
+    cursch = to_clean_numeric(merged["PC15_CURSCH"], na_codes={9})
+    job = to_clean_numeric(merged["PXC22_JOB"], na_codes={9})
+    elect = to_clean_numeric(merged["PD1_ELECT"], na_codes={9})
+
+    clean = pd.concat(
+        [
+            pd.DataFrame({"survey_year": np.int16(2008)}, index=merged.index),
+            geo,
+            pd.DataFrame(
+                {
+                    "urbanity": pd.Series(pd.NA, index=merged.index, dtype="Int64"),  # Not in 2008 PUF
+                    "psu": to_clean_numeric(merged["PPSU"]).astype("Int64"),
+                    "hh_id": (
+                        merged["PSTRATUM"].astype(str).str.zfill(3)
+                        + "_" + merged["PPSU"].astype(str).str.zfill(5)
+                        + "_" + merged["PHHSEQNO"].astype(str).str.zfill(4)
+                    ),
+                    "line_no": to_clean_numeric(merged["PC01_LNO"]).astype("Int64"),
+                    "sex": to_clean_numeric(merged["PC04_SEX"], na_codes={9}).astype("Int64"),
+                    "age": to_clean_numeric(merged["PC05_AGE"], na_codes={999}).astype("Int64"),
+                    "highest_grade": to_clean_numeric(merged["PC12_HGRADE"], na_codes={99, 999}).astype("Int64"),
+                    "attending_school": np.where(cursch == 1, 1, np.where(cursch == 2, 0, np.nan)),
+                    "employed": np.where(job == 1, 1, np.where(job == 2, 0, np.nan)),
+                    "basic_literate": np.where(basic_lit == 1, 1, np.where(basic_lit == 2, 0, np.nan)),
+                    "func_literacy_level": flevel.astype("Int64"),
+                    "func_literate": np.where(flevel.isin([3, 4]), 1, np.where(flevel.isin([0, 1, 2]), 0, np.nan)),
+                    "hh_electricity": np.where(elect == 1, 1, np.where(elect == 2, 0, np.nan)),
+                    "pop_weight": to_clean_numeric(merged["PFPOPWGT"]),
+                    "literacy_weight": to_clean_numeric(merged["PF2FWGT"]),
+                },
+                index=merged.index,
+            ),
+        ],
+        axis=1,
+    )
+    logger.info("2008 clean rows: %d | NIR members: %d", len(clean), int(clean["is_nir"].sum()))
+    return clean
+
